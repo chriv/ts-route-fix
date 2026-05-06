@@ -151,6 +151,30 @@ notepad "$env:ProgramData\ts-route-fix\sites.conf"
 ts-route-fix.bat -DryRun -Verbose
 ```
 
+## Auto-run on Tailscale connect
+
+`setup.sh` and `setup.ps1` install the appropriate hook for your platform automatically. Details if you need to manage them manually:
+
+**macOS** — a LaunchDaemon watches the Tailscale socket and triggers ts-route-fix when it changes:
+```sh
+# Load / unload
+sudo launchctl bootstrap system /Library/LaunchDaemons/org.ts-route-fix.plist
+sudo launchctl bootout  system /Library/LaunchDaemons/org.ts-route-fix.plist
+
+# Logs
+tail -f /var/log/ts-route-fix.log
+```
+
+**Linux** — a dispatcher hook is installed for whichever network manager is present (NetworkManager and/or networkd-dispatcher). The hook only fires when the `tailscale0` interface becomes routable. To install manually, see `linux/ts-route-fix-hook`.
+
+**Windows** — a Task Scheduler task fires on Event 10000 (network profile connected) with a 5-second delay. To manage it:
+```powershell
+Get-ScheduledTask -TaskName 'ts-route-fix'
+Disable-ScheduledTask -TaskName 'ts-route-fix'
+Enable-ScheduledTask  -TaskName 'ts-route-fix'
+Unregister-ScheduledTask -TaskName 'ts-route-fix' -Confirm:$false
+```
+
 ## Project status
 
 | Phase | Status | Description |
@@ -158,7 +182,7 @@ ts-route-fix.bat -DryRun -Verbose
 | 1 | ✅ Done | Config-driven Mac + Linux shell script |
 | 2 | ✅ Done | Windows PowerShell (`ts-route-fix.ps1` + `ts-route-fix.bat`) |
 | 3 | ✅ Done | Installer scripts (`setup.sh` / `setup.ps1`) |
-| 4 | Planned | Auto-run on Tailscale up (LaunchDaemon / networkd-dispatcher / Task Scheduler) |
+| 4 | ✅ Done | Auto-run on Tailscale up (LaunchDaemon / networkd-dispatcher / Task Scheduler) |
 | 5 | Planned | Uninstall, test matrix, hardening |
 
 ## Security notes

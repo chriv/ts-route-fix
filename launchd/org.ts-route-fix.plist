@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    macOS LaunchDaemon for ts-route-fix
+    Installed by setup.sh to /Library/LaunchDaemons/org.ts-route-fix.plist
+
+    Watches the Tailscale daemon socket. When the socket appears or changes
+    (i.e., when Tailscale connects or reconnects), launchd runs ts-route-fix
+    to adjust the routing table.
+
+    Manual load/unload:
+        sudo launchctl bootstrap system /Library/LaunchDaemons/org.ts-route-fix.plist
+        sudo launchctl bootout  system /Library/LaunchDaemons/org.ts-route-fix.plist
+
+    View logs:
+        tail -f /var/log/ts-route-fix.log
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>org.ts-route-fix</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/ts-route-fix</string>
+        <string>-q</string>
+    </array>
+
+    <!--
+        Poll every 30 seconds. Toggling the Tailscale VPN on/off only sends
+        commands through the socket to the already-running tailscaled daemon —
+        the socket file itself does not change, so WatchPaths alone is not
+        sufficient. A short StartInterval is the reliable trigger for
+        connect/disconnect events. ts-route-fix exits in under a second when
+        nothing needs changing, so the overhead is negligible.
+    -->
+    <key>StartInterval</key>
+    <integer>60</integer>
+
+    <!--
+        Also watch the socket so we catch tailscaled restarts immediately,
+        without waiting for the next interval.
+    -->
+    <key>WatchPaths</key>
+    <array>
+        <string>/var/run/tailscale/tailscaled.sock</string>
+    </array>
+
+    <!-- Run once at load time to fix routes if Tailscale is already up -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!--
+        Coalesce rapid firings (e.g., during tailscaled restarts) into a
+        single run. 10 seconds is the launchd default; stated explicitly.
+    -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>/var/log/ts-route-fix.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/var/log/ts-route-fix.log</string>
+</dict>
+</plist>

@@ -1,0 +1,38 @@
+#!/bin/sh
+# ts-route-fix network event hook for Linux
+#
+# Works as both a NetworkManager dispatcher script and a networkd-dispatcher
+# script — install in whichever dispatcher directory applies to your system.
+#
+# NetworkManager dispatcher
+#   Called with: $1=interface  $2=action  (e.g., tailscale0 up)
+#   Install:
+#     sudo cp ts-route-fix-hook /etc/NetworkManager/dispatcher.d/ts-route-fix
+#     sudo chmod 755 /etc/NetworkManager/dispatcher.d/ts-route-fix
+#
+# networkd-dispatcher
+#   Called with: $1=interface  (placed in routable.d/ so state is implicit)
+#   Install:
+#     sudo cp ts-route-fix-hook /etc/networkd-dispatcher/routable.d/ts-route-fix
+#     sudo chmod 755 /etc/networkd-dispatcher/routable.d/ts-route-fix
+#
+# In both cases only the tailscale0 interface triggers ts-route-fix.
+
+IFACE="${1:-}"
+# For NetworkManager $2 is the action; for networkd-dispatcher (routable.d/)
+# there is no $2 — default to "routable" so the case below always matches.
+ACTION="${2:-routable}"
+
+# Only act on the Tailscale interface
+[ "$IFACE" = "tailscale0" ] || exit 0
+
+# Only act on bring-up events; ignore down/dhcp4-change/etc.
+case "$ACTION" in
+    up|routable|configured) ;;
+    *) exit 0 ;;
+esac
+
+# Brief pause to let Tailscale finish installing its routes before we adjust them
+sleep 2
+
+exec /usr/local/bin/ts-route-fix -q

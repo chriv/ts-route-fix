@@ -4,8 +4,9 @@
 # Usage: sudo ./setup.sh
 #
 # Installs ts-route-fix to /usr/local/bin, creates /etc/ts-route-fix/,
-# seeds an example sites.conf if none exists, and optionally installs a
-# sudoers drop-in so the target user can run the script without a password.
+# seeds an example sites.conf if none exists, installs a sudoers drop-in,
+# and installs the network hook so ts-route-fix runs automatically when
+# Tailscale connects (LaunchDaemon on macOS, dispatcher hook on Linux).
 
 set -eu
 
@@ -51,11 +52,32 @@ log "  Done."
 log "Creating config directory $CONF_DIR..."
 mkdir -p "$CONF_DIR"
 
-if [ -f "$CONF_FILE" ]; then
+if [ -f "$CONF_FILE" ] && [ -f "$SCRIPT_DIR/config/sites.conf" ]; then
+    # Both the installed config and a repo config exist — ask which to keep
+    if [ -t 0 ]; then
+        printf 'setup: %s already exists and config/sites.conf is also present.\n' "$CONF_FILE"
+        printf 'setup: Overwrite installed config with repo version? [y/N] '
+        read -r _answer
+        case "$_answer" in
+            [Yy]*)
+                cp "$SCRIPT_DIR/config/sites.conf" "$CONF_FILE"
+                log "  Replaced $CONF_FILE with config/sites.conf."
+                ;;
+            *)
+                log "  Keeping existing $CONF_FILE."
+                ;;
+        esac
+    else
+        log "  $CONF_FILE already exists — leaving it in place (non-interactive)."
+    fi
+elif [ -f "$CONF_FILE" ]; then
     log "  $CONF_FILE already exists — leaving it in place."
+elif [ -f "$SCRIPT_DIR/config/sites.conf" ]; then
+    cp "$SCRIPT_DIR/config/sites.conf" "$CONF_FILE"
+    log "  Copied config/sites.conf to $CONF_FILE."
 else
     cp "$SCRIPT_DIR/config/sites.conf.example" "$CONF_FILE"
-    log "  Copied sites.conf.example to $CONF_FILE."
+    log "  Copied sites.conf.example to $CONF_FILE (edit before first use)."
 fi
 
 # ── Sudoers drop-in ───────────────────────────────────────────────────────────────
@@ -90,6 +112,62 @@ else
         warn "  $INSTALL_USER ALL=(ALL) NOPASSWD: $INSTALL_BIN"
     fi
 fi
+
+# ── Network hook ─────────────────────────────────────────────────────────────────
+
+case "$OS" in
+    Darwin)
+        PLIST_SRC="$SCRIPT_DIR/launchd/org.ts-route-fix.plist"
+        PLIST_DST="/Library/LaunchDaemons/org.ts-route-fix.plist"
+        log "Installing LaunchDaemon..."
+        # Unload first if already running so plist changes take effect
+        if launchctl list org.ts-route-fix >/dev/null 2>&1; then
+            log "  Stopping existing daemon..."
+            launchctl bootout system "$PLIST_DST" 2>/dev/null \
+                || launchctl unload "$PLIST_DST" 2>/dev/null \
+                || true
+        fi
+        cp "$PLIST_SRC" "$PLIST_DST"
+        chmod 644 "$PLIST_DST"
+        chown root:wheel "$PLIST_DST"
+        # Try modern bootstrap first, fall back to legacy load
+        if launchctl bootstrap system "$PLIST_DST" 2>/dev/null; then
+            log "  Bootstrapped: $PLIST_DST"
+        elif launchctl load -w "$PLIST_DST" 2>/dev/null; then
+            log "  Loaded: $PLIST_DST"
+        else
+            warn "Could not activate LaunchDaemon automatically."
+            warn "Reboot, or run: sudo launchctl bootstrap system $PLIST_DST"
+        fi
+        log "  ts-route-fix will run automatically when Tailscale connects."
+        log "  Logs: /var/log/ts-route-fix.log"
+        ;;
+    Linux)
+        HOOK_SRC="$SCRIPT_DIR/linux/ts-route-fix-hook"
+        HOOK_INSTALLED=0
+
+        if [ -d /etc/NetworkManager/dispatcher.d ]; then
+            log "Installing NetworkManager dispatcher hook..."
+            cp "$HOOK_SRC" /etc/NetworkManager/dispatcher.d/ts-route-fix
+            chmod 755 /etc/NetworkManager/dispatcher.d/ts-route-fix
+            log "  Installed: /etc/NetworkManager/dispatcher.d/ts-route-fix"
+            HOOK_INSTALLED=1
+        fi
+
+        if [ -d /etc/networkd-dispatcher/routable.d ]; then
+            log "Installing networkd-dispatcher hook..."
+            cp "$HOOK_SRC" /etc/networkd-dispatcher/routable.d/ts-route-fix
+            chmod 755 /etc/networkd-dispatcher/routable.d/ts-route-fix
+            log "  Installed: /etc/networkd-dispatcher/routable.d/ts-route-fix"
+            HOOK_INSTALLED=1
+        fi
+
+        if [ "$HOOK_INSTALLED" -eq 0 ]; then
+            warn "No supported network dispatcher found (NetworkManager or networkd-dispatcher)."
+            warn "See linux/ts-route-fix-hook for manual installation instructions."
+        fi
+        ;;
+esac
 
 # ── Done ──────────────────────────────────────────────────────────────────────────
 

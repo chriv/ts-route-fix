@@ -24,9 +24,10 @@ VERBOSE=0
 
 # ── Logging ──────────────────────────────────────────────────────────────────────
 
-log()     { printf 'ts-route-fix: %s\n' "$*"; }
-verbose() { [ "$VERBOSE" -eq 1 ] && printf 'ts-route-fix: %s\n' "$*" || true; }
-die()     { printf 'ts-route-fix: ERROR: %s\n' "$*" >&2; exit 1; }
+_now()    { date '+%Y-%m-%d %H:%M:%S'; }
+log()     { printf 'ts-route-fix: [%s] %s\n' "$(_now)" "$*"; }
+verbose() { [ "$VERBOSE" -eq 1 ] && printf 'ts-route-fix: [%s] %s\n' "$(_now)" "$*" || true; }
+die()     { printf 'ts-route-fix: [%s] ERROR: %s\n' "$(_now)" "$*" >&2; exit 1; }
 
 run_cmd() {
     if [ "$DRY_RUN" -eq 1 ]; then
@@ -140,6 +141,75 @@ route_del_any() {
     esac
 }
 
+# ── Route Table Check ────────────────────────────────────────────────────────────
+#
+# Read the route table ONCE per run and check it in memory.  No per-route
+# commands; all comparison is string-matching against a cached variable.
+
+# Convert CIDR notation to BSD netstat display format (macOS only).
+# Strips trailing zero octets and omits the prefix length when it coincides
+# with the classful boundary (A=/8, B=/16, C=/24).
+# Examples: 10.10.16.0/21 -> 10.10.16/21    10.0.0.0/8 -> 10
+_cidr_to_netstat() {
+    _addr="${1%%/*}" _mask="${1##*/}"
+    _o1="${_addr%%.*}"; _r="${_addr#*.}"
+    _o2="${_r%%.*}";    _r="${_r#*.}"
+    _o3="${_r%%.*}";    _o4="${_r##*.}"
+
+    if   [ "$_o4" != "0" ]; then _net="$_o1.$_o2.$_o3.$_o4"
+    elif [ "$_o3" != "0" ]; then _net="$_o1.$_o2.$_o3"
+    elif [ "$_o2" != "0" ]; then _net="$_o1.$_o2"
+    else                          _net="$_o1"
+    fi
+
+    _classful=0
+    if   [ "$_o1" -le 127 ] && [ "$_mask" -eq  8 ]; then _classful=1
+    elif [ "$_o1" -ge 128 ] && [ "$_o1" -le 191 ] && [ "$_mask" -eq 16 ]; then _classful=1
+    elif [ "$_o1" -ge 192 ] && [ "$_o1" -le 223 ] && [ "$_mask" -eq 24 ]; then _classful=1
+    fi
+
+    [ "$_classful" -eq 1 ] && printf '%s' "$_net" || printf '%s/%s' "$_net" "$_mask"
+}
+
+# Snapshot the routing table into a variable (called once per run).
+_read_route_table() {
+    case "$OS" in
+        Darwin) netstat -rn -f inet 2>/dev/null ;;
+        Linux)  ip route show table 52 2>/dev/null ;;
+    esac
+}
+
+# Returns 0 if the given CIDR is currently present on the Tailscale interface.
+_ts_route_present() {
+    _cidr="$1"
+    case "$OS" in
+        Darwin)
+            _net=$(_cidr_to_netstat "$_cidr")
+            printf '%s\n' "$ROUTE_TABLE" | awk -v n="$_net" -v i="$TS_IF" \
+                '$1 == n && $NF == i { found=1 } END { exit 1-found }'
+            ;;
+        Linux)
+            printf '%s\n' "$ROUTE_TABLE" | grep -q "^${_cidr} "
+            ;;
+    esac
+}
+
+# Returns 0 (fix needed) if any TS_REMOVE_ROUTES for the matched site are
+# still present on the Tailscale interface.
+_needs_fix() {
+    [ -n "$MATCHED_TS_ROUTES" ] || return 1
+    _IFS_SAVE="$IFS"; IFS=','
+    for _r in $MATCHED_TS_ROUTES; do
+        if _ts_route_present "$_r"; then
+            IFS="$_IFS_SAVE"
+            verbose "  TS route $_r still on $TS_IF — fix needed"
+            return 0
+        fi
+    done
+    IFS="$_IFS_SAVE"
+    return 1
+}
+
 # ── Site Matching Helpers ─────────────────────────────────────────────────────────
 
 # Returns 0 if any comma-separated needle in $2 appears as a substring of $1
@@ -179,10 +249,16 @@ EOF
 # ── Main ──────────────────────────────────────────────────────────────────────────
 
 TS_IF=$(detect_ts_if)
-[ -n "$TS_IF" ] || die "Tailscale interface not found — is Tailscale running?"
+if [ -z "$TS_IF" ]; then
+    verbose "Tailscale not running — skipping"
+    exit 0
+fi
 
 LOCAL_GW=$(detect_default_gw)
-[ -n "$LOCAL_GW" ] || die "No default gateway found"
+if [ -z "$LOCAL_GW" ]; then
+    verbose "No default gateway — skipping"
+    exit 0
+fi
 
 SEARCH_DOMAINS=$(grep "^search" /etc/resolv.conf 2>/dev/null | cut -d' ' -f2- || true)
 
@@ -192,8 +268,8 @@ else
     LOCAL_IPS=$(ip -4 addr show | awk '/inet / && !/127\./ && !/100\./ { split($2,a,"/"); print a[1] }')
 fi
 
-log "Tailscale interface : $TS_IF"
-log "Default gateway     : $LOCAL_GW"
+verbose "Tailscale interface : $TS_IF"
+verbose "Default gateway     : $LOCAL_GW"
 verbose "Search domains      : $SEARCH_DOMAINS"
 verbose "Local IPs           : $(printf '%s ' $LOCAL_IPS)"
 
@@ -224,28 +300,42 @@ while IFS='|' read -r _name _domains _ip_prefix _ts_routes _gw_routes; do
     fi
 done < "$CONF_FILE"
 
-# ── Pass 2: Apply or report ───────────────────────────────────────────────────────
-
 if [ -z "$MATCHED_SITE" ]; then
-    log "Location: EXTERNAL (no configured site matched)"
-else
-    log "Location: $MATCHED_SITE — fixing routes"
+    verbose "No site matched — skipping"
+    exit 0
+fi
 
-    if [ -n "$MATCHED_TS_ROUTES" ]; then
-        _IFS_SAVE="$IFS"; IFS=','
-        for _r in $MATCHED_TS_ROUTES; do
-            ts_route_del "$_r" "$TS_IF"
-        done
-        IFS="$_IFS_SAVE"
-    fi
+verbose "Matched site        : $MATCHED_SITE"
 
-    if [ -n "$MATCHED_GW_ROUTES" ]; then
-        _IFS_SAVE="$IFS"; IFS=','
-        for _r in $MATCHED_GW_ROUTES; do
-            gw_route_add "$_r" "$LOCAL_GW"
-        done
-        IFS="$_IFS_SAVE"
-    fi
+# ── Route table check ─────────────────────────────────────────────────────────────
+# Read the table once; _needs_fix compares in memory — no further commands needed
+# if routes are already correct.
+
+ROUTE_TABLE=$(_read_route_table)
+
+if ! _needs_fix; then
+    verbose "Routes already correct for '$MATCHED_SITE' — nothing to do"
+    exit 0
+fi
+
+# ── Pass 2: Apply fix ─────────────────────────────────────────────────────────────
+
+log "Location: $MATCHED_SITE — fixing routes"
+
+if [ -n "$MATCHED_TS_ROUTES" ]; then
+    _IFS_SAVE="$IFS"; IFS=','
+    for _r in $MATCHED_TS_ROUTES; do
+        ts_route_del "$_r" "$TS_IF"
+    done
+    IFS="$_IFS_SAVE"
+fi
+
+if [ -n "$MATCHED_GW_ROUTES" ]; then
+    _IFS_SAVE="$IFS"; IFS=','
+    for _r in $MATCHED_GW_ROUTES; do
+        gw_route_add "$_r" "$LOCAL_GW"
+    done
+    IFS="$_IFS_SAVE"
 fi
 
 # ── Pass 3: Clean up stale GW routes from non-matched sites ───────────────────────

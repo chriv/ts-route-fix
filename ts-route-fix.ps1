@@ -38,15 +38,18 @@ $ErrorActionPreference = 'Continue'
 # ── Logging ───────────────────────────────────────────────────────────────────────
 
 function Write-Log([string]$Message) {
-    Write-Host "ts-route-fix: $Message"
+    $ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    Write-Host "ts-route-fix: [$ts] $Message"
 }
 
 function Write-Dbg([string]$Message) {
-    Write-Verbose "ts-route-fix: $Message"
+    $ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    Write-Verbose "ts-route-fix: [$ts] $Message"
 }
 
 function Stop-WithError([string]$Message) {
-    [Console]::Error.WriteLine("ts-route-fix: ERROR: $Message")
+    $ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    [Console]::Error.WriteLine("ts-route-fix: [$ts] ERROR: $Message")
     exit 1
 }
 

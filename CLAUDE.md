@@ -103,7 +103,7 @@ Key tasks:
 - Copy script to `C:\Program Files\ts-route-fix\`
 - Create config directory and example config
 
-### Phase 4 — Auto-run on Tailscale up
+### Phase 4 — Auto-run on Tailscale up ✅ Done
 **Goal:** The script runs automatically whenever Tailscale brings up its interface.
 
 Mac approach:
