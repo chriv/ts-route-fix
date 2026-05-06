@@ -1,0 +1,14 @@
+# /etc/sudoers.d/ts-route-fix
+#
+# Allows a specific user to run ts-route-fix as root without a password prompt.
+# This is installed automatically by setup.sh, but can also be added manually.
+#
+# Manual install:
+#   sudo cp sudoers.d/ts-route-fix.example /etc/sudoers.d/ts-route-fix
+#   sudo chmod 440 /etc/sudoers.d/ts-route-fix
+#   sudo visudo -c        # validate the full sudoers config before relying on it
+#
+# Replace YOUR_USERNAME with the actual login name of the user who will run
+# ts-route-fix (the user invoking sudo, not root).
+
+YOUR_USERNAME ALL=(ALL) NOPASSWD: /usr/local/bin/ts-route-fix

@@ -117,37 +117,38 @@ ts-route-fix.bat -DryRun -Verbose
 
 ## Installation
 
-> **Phase 3** will add `setup.sh` / `setup.ps1` that handle this automatically. For now, install manually:
-
 ### macOS / Linux
 
 ```sh
-sudo cp ts-route-fix.sh /usr/local/bin/ts-route-fix
-sudo chmod 755 /usr/local/bin/ts-route-fix
-sudo mkdir -p /etc/ts-route-fix
-sudo cp config/sites.conf.example /etc/ts-route-fix/sites.conf
-# Edit /etc/ts-route-fix/sites.conf with your site definitions
+sudo ./setup.sh
 ```
+
+`setup.sh` installs the script to `/usr/local/bin/ts-route-fix`, creates `/etc/ts-route-fix/`, seeds an example `sites.conf` if none exists, and installs a sudoers drop-in so you can run it without a password prompt. Run it from the repo directory as shown above.
 
 ### Windows
 
+Run `setup.ps1` from the repo directory in an Administrator PowerShell session (or double-click — it will re-launch elevated automatically):
+
 ```powershell
-# Run as Administrator
-Copy-Item ts-route-fix.ps1, ts-route-fix.bat -Destination 'C:\Program Files\ts-route-fix\'
-New-Item -ItemType Directory -Force "$env:ProgramData\ts-route-fix"
-Copy-Item config\sites.conf.example "$env:ProgramData\ts-route-fix\sites.conf"
-# Edit $env:ProgramData\ts-route-fix\sites.conf with your site definitions
+.\setup.ps1
 ```
 
-### Running without a password prompt (macOS / Linux)
+`setup.ps1` copies the scripts to `C:\Program Files\ts-route-fix\`, creates `%ProgramData%\ts-route-fix\`, seeds an example `sites.conf` if none exists, and adds the install directory to the system PATH.
 
-Create a sudoers drop-in so your user can run the script as root without entering a password:
+### After installation
+
+Edit your site definitions, then do a dry-run before the first real run:
 
 ```sh
-echo "$USER ALL=(ALL) NOPASSWD: /usr/local/bin/ts-route-fix" \
-    | sudo tee /etc/sudoers.d/ts-route-fix
-sudo chmod 440 /etc/sudoers.d/ts-route-fix
-sudo visudo -c   # validate before relying on it
+# macOS / Linux
+${EDITOR:-vi} /etc/ts-route-fix/sites.conf
+sudo ts-route-fix -n -v
+```
+
+```powershell
+# Windows (as Administrator)
+notepad "$env:ProgramData\ts-route-fix\sites.conf"
+ts-route-fix.bat -DryRun -Verbose
 ```
 
 ## Project status
@@ -156,7 +157,7 @@ sudo visudo -c   # validate before relying on it
 |---|---|---|
 | 1 | ✅ Done | Config-driven Mac + Linux shell script |
 | 2 | ✅ Done | Windows PowerShell (`ts-route-fix.ps1` + `ts-route-fix.bat`) |
-| 3 | Planned | Installer scripts (`setup.sh` / `setup.ps1`) |
+| 3 | ✅ Done | Installer scripts (`setup.sh` / `setup.ps1`) |
 | 4 | Planned | Auto-run on Tailscale up (LaunchDaemon / networkd-dispatcher / Task Scheduler) |
 | 5 | Planned | Uninstall, test matrix, hardening |
 

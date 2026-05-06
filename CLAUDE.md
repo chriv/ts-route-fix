@@ -88,7 +88,7 @@ Key tasks:
 - Route ops: `Remove-NetRoute` / `New-NetRoute` (requires elevation)
 - Provide a `.bat` launcher shim for contexts that can't call `.ps1` directly
 
-### Phase 3 — Installer scripts
+### Phase 3 — Installer scripts ✅ Done
 **Goal:** `setup.sh` (Mac/Linux) and `setup.ps1` (Windows) that install everything with a single command.
 
 `setup.sh` tasks:
