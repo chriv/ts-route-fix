@@ -2,6 +2,23 @@
 
 Fixes Tailscale route conflicts when a local network's subnets overlap with routes Tailscale advertises. Detects which site you're at and removes the conflicting Tailscale routes, restoring local routing for those subnets. When you move to a different site, stale local routes are cleaned up automatically.
 
+## Quick start
+
+```sh
+# macOS / Linux — edit your site config, install, then verify
+sudo mkdir -p /etc/ts-route-fix
+sudo cp config/sites.conf.example /etc/ts-route-fix/sites.conf
+sudo ${EDITOR:-vi} /etc/ts-route-fix/sites.conf
+sudo ./setup.sh
+sudo ts-route-fix -n -v
+```
+
+**Windows:** run `.\setup.ps1` as Administrator (it will self-elevate), then edit `%ProgramData%\ts-route-fix\sites.conf`.
+
+To uninstall: `sudo ./setup.sh --uninstall` or `.\setup.ps1 -Uninstall`.
+
+---
+
 ## The problem
 
 Tailscale lets exit nodes and subnet routers advertise routes to the whole tailnet. If you're physically on one of those networks, Tailscale's route for that subnet shadows your local routing — traffic that should stay on the LAN goes through the tunnel instead.
@@ -10,11 +27,14 @@ Tailscale lets exit nodes and subnet routers advertise routes to the whole tailn
 
 A `sites.conf` file defines each known location: which DNS search domains (or local IP prefixes) identify it, which Tailscale-advertised routes to remove, and which of those routes to explicitly re-add via the local gateway. On each run:
 
-1. **Detect site** — match `/etc/resolv.conf` search domains, fall back to local IP prefix
-2. **Fix routes** — delete matched routes from the Tailscale interface; re-add via local gateway where needed
-3. **Clean up** — remove any locally-added routes from other sites (handles moving between locations)
+1. **Detect site** — match `/etc/resolv.conf` search domains, fall back to local IP prefix; exit silently if Tailscale is not running or no site matches
+2. **Check routes** — read the routing table once; if the configured routes are already correct, exit silently with no output
+3. **Fix routes** — delete matched routes from the Tailscale interface; re-add via local gateway where needed
+4. **Clean up** — remove any locally-added routes from other sites (handles moving between locations)
 
-If no configured site matches, the script reports `EXTERNAL` and still cleans up stale routes.
+The script produces no output when routes are already in the correct state, making it safe to run frequently as a daemon.
+
+> **Tailscale node configuration note:** Never configure a node as both a subnet router (or exit node) *and* have it accept routes from Tailscale. A subnet router needs to see the full picture of your network to relay traffic correctly — having it simultaneously accept routes from other subnet routers creates conflicts that are genuinely painful to diagnose. ts-route-fix belongs on *client* nodes that accept routes and occasionally find themselves physically on one of the advertised networks, not on the routers doing the advertising.
 
 ## Requirements
 
@@ -76,7 +96,7 @@ sudo ts-route-fix [-c config_file] [-n] [-q] [-v]
 | `-c path` | Path to `sites.conf` (default: `/etc/ts-route-fix/sites.conf`) |
 | `-n` | Dry-run: print what would be done without executing |
 | `-q` | Quiet: suppress output from route commands (useful for unattended/hook runs) |
-| `-v` | Verbose: show interface/IP details and each command run |
+| `-v` | Verbose: show state-check results on every run, plus interface/IP details and each command run — useful for verifying the daemon is polling correctly even when nothing needs fixing |
 
 Config path can also be set via `$TS_ROUTE_FIX_CONF`.
 
@@ -155,14 +175,21 @@ ts-route-fix.bat -DryRun -Verbose
 
 `setup.sh` and `setup.ps1` install the appropriate hook for your platform automatically. Details if you need to manage them manually:
 
-**macOS** — a LaunchDaemon watches the Tailscale socket and triggers ts-route-fix when it changes:
+**macOS** — a LaunchDaemon polls every 60 seconds and also watches the Tailscale socket for daemon restarts. Each poll reads the routing table and exits silently if routes are already correct; log entries only appear when routes are actually changed. Logs go to `/var/log/ts-route-fix.log`.
+
 ```sh
 # Load / unload
 sudo launchctl bootstrap system /Library/LaunchDaemons/org.ts-route-fix.plist
 sudo launchctl bootout  system /Library/LaunchDaemons/org.ts-route-fix.plist
 
-# Logs
+# Confirm it is loaded and last exit code
+sudo launchctl list | grep ts-route-fix
+
+# Follow the log (entries only appear when routes change)
 tail -f /var/log/ts-route-fix.log
+
+# Verify polling is running silently (shows state-check output even on no-op)
+sudo ts-route-fix -v
 ```
 
 **Linux** — a dispatcher hook is installed for whichever network manager is present (NetworkManager and/or networkd-dispatcher). The hook only fires when the `tailscale0` interface becomes routable. To install manually, see `linux/ts-route-fix-hook`.
@@ -183,7 +210,7 @@ Unregister-ScheduledTask -TaskName 'ts-route-fix' -Confirm:$false
 | 2 | ✅ Done | Windows PowerShell (`ts-route-fix.ps1` + `ts-route-fix.bat`) |
 | 3 | ✅ Done | Installer scripts (`setup.sh` / `setup.ps1`) |
 | 4 | ✅ Done | Auto-run on Tailscale up (LaunchDaemon / networkd-dispatcher / Task Scheduler) |
-| 5 | Planned | Uninstall, test matrix, hardening |
+| 5 | ✅ Done | Uninstall (`--uninstall` / `-Uninstall`), quickstart docs, hardening |
 
 ## Security notes
 

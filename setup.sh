@@ -1,12 +1,10 @@
 #!/bin/sh
-# setup.sh — installer for ts-route-fix (macOS and Linux)
+# setup.sh — installer/uninstaller for ts-route-fix (macOS and Linux)
 #
-# Usage: sudo ./setup.sh
-#
-# Installs ts-route-fix to /usr/local/bin, creates /etc/ts-route-fix/,
-# seeds an example sites.conf if none exists, installs a sudoers drop-in,
-# and installs the network hook so ts-route-fix runs automatically when
-# Tailscale connects (LaunchDaemon on macOS, dispatcher hook on Linux).
+# Usage:
+#   sudo ./setup.sh             Install ts-route-fix
+#   sudo ./setup.sh --uninstall Remove ts-route-fix
+#   sudo ./setup.sh --help      Show this help
 
 set -eu
 
@@ -19,15 +17,81 @@ log()  { printf 'setup: %s\n' "$*"; }
 warn() { printf 'setup: WARNING: %s\n' "$*" >&2; }
 die()  { printf 'setup: ERROR: %s\n' "$*" >&2; exit 1; }
 
+# ── Mode selection ────────────────────────────────────────────────────────────────
+
+case "${1:-}" in
+    --uninstall) MODE=uninstall ;;
+    --help|-h)
+        printf 'Usage: sudo %s [--uninstall]\n' "$0"
+        printf '  (no args)     Install ts-route-fix\n'
+        printf '  --uninstall   Remove ts-route-fix\n'
+        exit 0
+        ;;
+    '') MODE=install ;;
+    *) die "Unknown argument: $1  (try --help)" ;;
+esac
+
+# ── Uninstall ────────────────────────────────────────────────────────────────────
+
+do_uninstall() {
+    log "Uninstalling ts-route-fix..."
+
+    case "$OS" in
+        Darwin)
+            PLIST_DST="/Library/LaunchDaemons/org.ts-route-fix.plist"
+            if [ -f "$PLIST_DST" ]; then
+                log "Removing LaunchDaemon..."
+                launchctl bootout system "$PLIST_DST" 2>/dev/null \
+                    || launchctl unload "$PLIST_DST" 2>/dev/null \
+                    || true
+                rm -f "$PLIST_DST"
+                log "  Removed $PLIST_DST"
+            fi
+            ;;
+        Linux)
+            for _hook in \
+                /etc/NetworkManager/dispatcher.d/ts-route-fix \
+                /etc/networkd-dispatcher/routable.d/ts-route-fix; do
+                if [ -f "$_hook" ]; then
+                    rm -f "$_hook"
+                    log "  Removed $_hook"
+                fi
+            done
+            ;;
+    esac
+
+    [ -f "$SUDOERS_FILE" ] && { rm -f "$SUDOERS_FILE"; log "  Removed $SUDOERS_FILE"; } || true
+    [ -f "$INSTALL_BIN"  ] && { rm -f "$INSTALL_BIN";  log "  Removed $INSTALL_BIN";  } || true
+
+    if [ -d "$CONF_DIR" ]; then
+        if [ -t 0 ]; then
+            printf 'setup: Remove config directory %s (contains your sites.conf)? [y/N] ' "$CONF_DIR"
+            read -r _answer
+            case "$_answer" in
+                [Yy]*) rm -rf "$CONF_DIR"; log "  Removed $CONF_DIR" ;;
+                *)     log "  Kept $CONF_DIR — remove manually if desired" ;;
+            esac
+        else
+            log "  Kept $CONF_DIR (non-interactive — remove manually if desired)"
+        fi
+    fi
+
+    printf '\n'
+    log "Uninstall complete."
+    printf '\n'
+}
+
 # ── Preflight ─────────────────────────────────────────────────────────────────────
 
-[ "$(id -u)" -eq 0 ] || die "Must be run as root. Try: sudo $0"
+[ "$(id -u)" -eq 0 ] || die "Must be run as root. Try: sudo $0 ${1:-}"
 
 OS=$(uname -s)
 case "$OS" in
     Darwin|Linux) ;;
     *) die "Unsupported OS: $OS" ;;
 esac
+
+[ "$MODE" = "uninstall" ] && { do_uninstall; exit 0; }
 
 # Locate the repo directory (where this script lives)
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

@@ -198,6 +198,12 @@ if (-not (Test-Path $Config)) {
 
 $tsAdapter = Get-TailscaleAdapter
 if (-not $tsAdapter) {
+    # TODO: sh version exits silently (verbose-only) when Tailscale is not running,
+    # so daemon polling produces no log noise. Stop-WithError is appropriate for
+    # interactive use but kills the Task Scheduler run with a non-zero exit on every
+    # poll when TS happens to be down. Consider: if (-not $DryRun) { exit 0 } else
+    # { Stop-WithError ... } — or check $env:SESSIONNAME to distinguish interactive
+    # vs scheduled runs.
     Stop-WithError "Tailscale interface not found — is Tailscale running?"
 }
 $tsIfIndex = $tsAdapter.InterfaceIndex
@@ -235,8 +241,24 @@ foreach ($site in $sites) {
 }
 
 # ── Pass 2: Apply or report ───────────────────────────────────────────────────────
+#
+# TODO (parity with ts-route-fix.sh): Two differences to resolve when testing on Windows:
+#
+# 1. Route pre-check — the sh version reads the route table once and exits silently
+#    if the configured routes are already correct (the common polling case). This
+#    prevents log noise and avoids unnecessary route commands. The equivalent here
+#    would be Get-NetRoute filtered to the TS interface index and checked against
+#    $matchedSite.TsRemove before proceeding. See _needs_fix() in ts-route-fix.sh
+#    for the reference logic.
+#
+# 2. Silent exit when no site matches — the sh version calls Write-Dbg (verbose-only)
+#    and exits 0 when no site matched. Write-Log below produces output on every Task
+#    Scheduler run when away from all configured sites, which pollutes any log
+#    capturing task output. Change Write-Log to Write-Dbg here once Windows testing
+#    confirms the rest of the flow is working correctly.
 
 if (-not $matchedSite) {
+    # TODO: change to Write-Dbg for parity with sh silent-when-unmatched behavior
     Write-Log "Location: EXTERNAL (no configured site matched)"
 } else {
     Write-Log "Location: $($matchedSite.Name) — fixing routes"

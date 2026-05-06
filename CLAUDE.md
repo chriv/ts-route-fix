@@ -120,11 +120,15 @@ Windows approach:
 - Task Scheduler task triggered on network adapter connect event (Event ID 10000 from `Microsoft-Windows-NetworkProfile`)
 - `setup.ps1` creates the task via `Register-ScheduledTask`
 
-### Phase 5 — Hardening, docs, and example configs
-- Add a `--uninstall` flag to `setup.sh` / `setup.ps1`
-- Write `README.md` with quickstart instructions (no real network info)
-- Ensure `sites.conf` and any generated files with real data are in `.gitignore`
-- Test matrix: Mac (zsh/bash), Ubuntu (bash), Debian (dash as /bin/sh), Windows 11 (PowerShell 5 and 7)
+### Phase 5 — Hardening, docs, and example configs ✅ Done
+- `--uninstall` added to `setup.sh`; `-Uninstall` added to `setup.ps1`
+- README has quickstart section and accurate behavioral descriptions
+- `.gitignore` covers all sensitive files
+
+**Test status:**
+- macOS (`/bin/sh` → bash in POSIX mode): tested end-to-end including LaunchDaemon
+- Linux: untested — dispatcher hook logic is correct, but table 52 TODO in `ts_route_del` must be resolved before first Linux run
+- Windows: untested — written to spec but not verified on a real machine; DHCP DNS suffix fallback also pending (see Phase 2 TODO in `ts-route-fix.ps1`)
 
 ## Critical Constraints
 

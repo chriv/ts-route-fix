@@ -8,11 +8,18 @@
     task so ts-route-fix runs automatically when a network profile connects.
 
     Re-launches itself elevated if not already running as Administrator.
+.PARAMETER Uninstall
+    Remove ts-route-fix: stops and removes the scheduled task, removes installed
+    files from PATH and Program Files, and optionally removes the config directory.
 .EXAMPLE
     .\setup.ps1
+.EXAMPLE
+    .\setup.ps1 -Uninstall
 #>
 [CmdletBinding()]
-param()
+param(
+    [switch]$Uninstall
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -22,8 +29,9 @@ $ErrorActionPreference = 'Stop'
 $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Write-Host 'setup: Not running as Administrator — relaunching elevated...'
-    $args = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
-    Start-Process powershell.exe -ArgumentList $args -Verb RunAs
+    $argList = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+    if ($Uninstall) { $argList += ' -Uninstall' }
+    Start-Process powershell.exe -ArgumentList $argList -Verb RunAs
     exit
 }
 
@@ -39,6 +47,51 @@ function Write-Setup {
 
 function Write-SetupWarn([string]$Message) {
     Write-Warning "setup: $Message"
+}
+
+# ── Uninstall ────────────────────────────────────────────────────────────────────
+
+if ($Uninstall) {
+    Write-Setup 'Uninstalling ts-route-fix...'
+
+    # Stop and remove scheduled task
+    if (Get-ScheduledTask -TaskName 'ts-route-fix' -ErrorAction SilentlyContinue) {
+        Write-Setup 'Removing scheduled task...'
+        Unregister-ScheduledTask -TaskName 'ts-route-fix' -Confirm:$false
+        Write-Setup '  Done.'
+    }
+
+    # Remove from system PATH
+    $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+    if ($machinePath -like "*$installDir*") {
+        Write-Setup 'Removing from system PATH...'
+        $newPath = ($machinePath -split ';' | Where-Object { $_ -ne $installDir }) -join ';'
+        [Environment]::SetEnvironmentVariable('Path', $newPath, 'Machine')
+        Write-Setup '  Done.'
+    }
+
+    # Remove installed scripts
+    if (Test-Path $installDir) {
+        Write-Setup "Removing $installDir..."
+        Remove-Item $installDir -Recurse -Force
+        Write-Setup '  Done.'
+    }
+
+    # Config directory — prompt before removing
+    if (Test-Path $configDir) {
+        $answer = Read-Host "setup: Remove config directory $configDir (contains your sites.conf)? [y/N]"
+        if ($answer -match '^[Yy]') {
+            Remove-Item $configDir -Recurse -Force
+            Write-Setup "  Removed $configDir."
+        } else {
+            Write-Setup "  Kept $configDir — remove manually if desired."
+        }
+    }
+
+    Write-Setup
+    Write-Setup 'Uninstall complete.'
+    Write-Setup
+    exit 0
 }
 
 # ── Preflight ─────────────────────────────────────────────────────────────────────
