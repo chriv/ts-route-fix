@@ -1,0 +1,14 @@
+# Real site configs — never commit these
+config/sites.conf
+config/*.local
+
+# Keep example files
+!config/sites.conf.example
+
+# Claude Code project settings (contains local paths)
+.claude/
+
+# Editor / OS junk
+.DS_Store
+*.swp
+*~

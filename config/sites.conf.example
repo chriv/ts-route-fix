@@ -1,0 +1,41 @@
+# ts-route-fix site configuration
+#
+# FORMAT (pipe-delimited, 5 fields):
+#   SITE_NAME | SEARCH_DOMAINS | LOCAL_IP_PREFIX | TS_REMOVE_ROUTES | GW_ADD_ROUTES
+#
+# Field details:
+#   SITE_NAME        Identifier shown in log output
+#   SEARCH_DOMAINS   Comma-separated strings matched against /etc/resolv.conf "search" line
+#   LOCAL_IP_PREFIX  Comma-separated IP prefixes used as fallback detection (e.g. "10.0.1.")
+#   TS_REMOVE_ROUTES Comma-separated CIDRs to delete from the Tailscale interface
+#   GW_ADD_ROUTES    Comma-separated CIDRs to re-add via the local gateway (can be empty)
+#
+# Detection order:
+#   1. SEARCH_DOMAINS match (preferred — DNS config changes as soon as you connect)
+#   2. LOCAL_IP_PREFIX match (fallback — check actual IP address)
+#
+# Behavior:
+#   Matched site:  TS_REMOVE_ROUTES are deleted from Tailscale; GW_ADD_ROUTES are
+#                  added via the local default gateway.
+#   Other sites:   Their GW_ADD_ROUTES are cleaned up (removes stale entries from
+#                  previous locations).
+#   No match:      Script reports EXTERNAL, still cleans up all GW_ADD_ROUTES.
+#
+# Notes:
+#   - Lines starting with # and blank lines are ignored
+#   - Whitespace around | is included in field values — avoid padding
+#   - CIDR operations are idempotent; missing routes are silently skipped
+#
+# ── Examples ────────────────────────────────────────────────────────────────────
+
+# Routes removed from Tailscale and re-added via the local gateway:
+# site1|site1.example.com|192.168.1.|192.168.1.0/24,192.168.2.0/24|192.168.1.0/24,192.168.2.0/24
+
+# Routes removed from Tailscale only (directly-connected; no explicit GW add needed):
+# site2|site2.example.com|10.1.0.|10.1.0.0/24,10.1.1.0/24,10.1.2.0/24|
+
+# Multiple subnets and multiple detection domains (comma-separated within each field):
+# site3|site3.example.com,site3.example.internal|172.16.0.|172.16.0.0/24,172.16.1.0/24,172.16.2.0/24,172.16.3.0/24|172.16.0.0/24,172.16.1.0/24,172.16.2.0/24,172.16.3.0/24
+
+# Detection by IP prefix only (no distinctive search domain):
+# site4||10.10.5.|10.10.5.0/24,10.10.6.0/24|10.10.5.0/24,10.10.6.0/24
