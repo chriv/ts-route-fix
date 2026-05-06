@@ -140,6 +140,16 @@ function Invoke-TsRouteDel([string]$CIDR, [int]$IfIndex, [string]$IfName) {
 }
 
 function Invoke-GwRouteAdd([string]$CIDR, [int]$IfIndex, [string]$NextHop) {
+    # TODO: Before adding, check whether this CIDR already exists as a
+    # directly-connected route on a non-Tailscale interface. If it does, skip
+    # the explicit add — removing the route from the Tailscale interface is
+    # sufficient and the existing connected route takes over automatically.
+    # Only add via gateway when no such connected route exists. This matters on
+    # any multi-NIC machine where some advertised subnets are directly reachable
+    # on a local interface that is not the default gateway's interface.
+    # Check candidate:
+    #   Get-NetRoute -DestinationPrefix $CIDR -ErrorAction SilentlyContinue |
+    #       Where-Object { $_.InterfaceIndex -ne $tsIfIndex -and $_.NextHop -eq '0.0.0.0' }
     Write-Log "  Adding $CIDR via $NextHop"
     if ($DryRun) {
         Write-Log "  [DRY-RUN] New-NetRoute -DestinationPrefix $CIDR -InterfaceIndex $IfIndex -NextHop $NextHop"

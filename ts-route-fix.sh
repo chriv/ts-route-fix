@@ -124,6 +124,18 @@ ts_route_del() {
 # Add a CIDR via the local default gateway
 gw_route_add() {
     _cidr="$1" _gw="$2"
+    # TODO: Before adding, check whether this CIDR already exists in the main
+    # routing table as a directly-connected route on a non-Tailscale interface.
+    # If it does, skip the explicit add — removing it from table 52 (Linux) or
+    # the Tailscale interface (macOS/Windows) is sufficient, and the kernel's
+    # existing connected route takes over automatically. Only add via gateway
+    # when no such connected route exists. This matters on any multi-NIC machine
+    # where some advertised subnets are directly reachable on a local interface
+    # that is not the default gateway's interface.
+    # Per-OS check candidates:
+    #   Linux:   ip route show table main "$_cidr" | grep -v tailscale0 | grep -q "scope link"
+    #   Darwin:  netstat -rn -f inet | awk -v n="$(_cidr_to_netstat $_cidr)" '$1==n && $NF!="utun*"'
+    #   Windows: Get-NetRoute -DestinationPrefix $cidr | Where-Object { $_.InterfaceIndex -ne $tsIfIndex }
     log "  Adding $_cidr via $_gw"
     case "$OS" in
         Darwin) run_cmd route -n add -net "$_cidr" "$_gw" ;;
