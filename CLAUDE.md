@@ -75,7 +75,7 @@ Key tasks:
 - Exit codes: 0 success, 1 no Tailscale interface, 2 no matching site (applies no changes)
 - Must be POSIX-compatible `#!/bin/sh` except where platform branching requires bash-isms
 
-### Phase 2 — Windows PowerShell script
+### Phase 2 — Windows PowerShell script ✅ Done
 **Goal:** `ts-route-fix.ps1` that reads the same `sites.conf` format and performs equivalent route management on Windows.
 
 Key tasks:
@@ -83,6 +83,7 @@ Key tasks:
 - Tailscale interface: find adapter whose IP is in `100.64.0.0/10` via `Get-NetIPAddress`
 - Default gateway: `Get-NetRoute -DestinationPrefix "0.0.0.0/0"`
 - Search domain detection: `(Get-DnsClientGlobalSetting).SuffixSearchList`
+- **TODO (Windows fallback):** If the suffix list is empty, also check the machine's primary DNS suffix — Windows populates this from the DHCP-assigned domain name as part of the host FQDN. Candidate API: `[System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().DomainName`
 - Local IP: `Get-NetIPAddress` filtered for private ranges
 - Route ops: `Remove-NetRoute` / `New-NetRoute` (requires elevation)
 - Provide a `.bat` launcher shim for contexts that can't call `.ps1` directly

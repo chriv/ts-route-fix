@@ -19,8 +19,8 @@ If no configured site matches, the script reports `EXTERNAL` and still cleans up
 ## Requirements
 
 - Tailscale running with subnet routes advertised
-- `root` / `sudo` for route modifications
-- macOS or Linux (Windows PowerShell support planned)
+- macOS or Linux: `root` / `sudo` for route modifications
+- Windows: Administrator privileges; PowerShell 5.1+ (ships with Windows 10/11)
 
 ## Configuration
 
@@ -65,8 +65,10 @@ Lines starting with `#` and blank lines are ignored. The config file is gitignor
 
 ## Usage
 
+### macOS / Linux
+
 ```
-ts-route-fix [-c config_file] [-n] [-v]
+sudo ts-route-fix [-c config_file] [-n] [-q] [-v]
 ```
 
 | Flag | Description |
@@ -76,23 +78,48 @@ ts-route-fix [-c config_file] [-n] [-v]
 | `-q` | Quiet: suppress output from route commands (useful for unattended/hook runs) |
 | `-v` | Verbose: show interface/IP details and each command run |
 
-The config path can also be set via the `$TS_ROUTE_FIX_CONF` environment variable.
+Config path can also be set via `$TS_ROUTE_FIX_CONF`.
 
-### Quick test before first real run
+Quick test before first real run:
 
 ```sh
 sudo ts-route-fix -n -v
 ```
 
-### Normal invocation
+### Windows
 
-```sh
-sudo ts-route-fix
+Run PowerShell or `ts-route-fix.bat` as Administrator.
+
+```powershell
+.\ts-route-fix.ps1 [-Config path] [-DryRun] [-Quiet] [-Verbose]
+```
+
+| Parameter | Description |
+|---|---|
+| `-Config path` | Path to `sites.conf` (default: `%ProgramData%\ts-route-fix\sites.conf`) |
+| `-DryRun` | Print what would be done without executing |
+| `-Quiet` | Suppress error output from route operations |
+| `-Verbose` | Show interface/IP details and each command run |
+
+Config path can also be set via `$env:TS_ROUTE_FIX_CONF`.
+
+Quick test before first real run:
+
+```powershell
+.\ts-route-fix.ps1 -DryRun -Verbose
+```
+
+The `.bat` launcher is provided for contexts that can't invoke `.ps1` directly (Task Scheduler, some automation tools):
+
+```
+ts-route-fix.bat -DryRun -Verbose
 ```
 
 ## Installation
 
-> **Phase 3** will add a `setup.sh` that handles this automatically including sudoers configuration. For now, install manually:
+> **Phase 3** will add `setup.sh` / `setup.ps1` that handle this automatically. For now, install manually:
+
+### macOS / Linux
 
 ```sh
 sudo cp ts-route-fix.sh /usr/local/bin/ts-route-fix
@@ -102,7 +129,17 @@ sudo cp config/sites.conf.example /etc/ts-route-fix/sites.conf
 # Edit /etc/ts-route-fix/sites.conf with your site definitions
 ```
 
-### Running without a password prompt
+### Windows
+
+```powershell
+# Run as Administrator
+Copy-Item ts-route-fix.ps1, ts-route-fix.bat -Destination 'C:\Program Files\ts-route-fix\'
+New-Item -ItemType Directory -Force "$env:ProgramData\ts-route-fix"
+Copy-Item config\sites.conf.example "$env:ProgramData\ts-route-fix\sites.conf"
+# Edit $env:ProgramData\ts-route-fix\sites.conf with your site definitions
+```
+
+### Running without a password prompt (macOS / Linux)
 
 Create a sudoers drop-in so your user can run the script as root without entering a password:
 
@@ -118,7 +155,7 @@ sudo visudo -c   # validate before relying on it
 | Phase | Status | Description |
 |---|---|---|
 | 1 | ✅ Done | Config-driven Mac + Linux shell script |
-| 2 | Planned | Windows PowerShell (`ts-route-fix.ps1`) |
+| 2 | ✅ Done | Windows PowerShell (`ts-route-fix.ps1` + `ts-route-fix.bat`) |
 | 3 | Planned | Installer scripts (`setup.sh` / `setup.ps1`) |
 | 4 | Planned | Auto-run on Tailscale up (LaunchDaemon / networkd-dispatcher / Task Scheduler) |
 | 5 | Planned | Uninstall, test matrix, hardening |
