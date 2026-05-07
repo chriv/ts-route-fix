@@ -29,7 +29,7 @@ A `sites.conf` file defines each known location: which DNS search domains (or lo
 
 1. **Detect site** — match `/etc/resolv.conf` search domains, fall back to local IP prefix; exit silently if Tailscale is not running or no site matches
 2. **Check routes** — read the routing table once; if the configured routes are already correct, exit silently with no output
-3. **Fix routes** — delete matched routes from the Tailscale interface; re-add via local gateway where needed
+3. **Fix routes** — delete matched routes from the Tailscale interface; re-add via the local interface (for directly-connected subnets) or via gateway (for all others)
 4. **Clean up** — remove any locally-added routes from other sites (handles moving between locations)
 
 The script produces no output when routes are already in the correct state, making it safe to run frequently as a daemon.
@@ -64,7 +64,7 @@ SITE_NAME | SEARCH_DOMAINS | LOCAL_IP_PREFIX | TS_REMOVE_ROUTES | GW_ADD_ROUTES
 | `SEARCH_DOMAINS` | Comma-separated strings matched against `/etc/resolv.conf` search line |
 | `LOCAL_IP_PREFIX` | Comma-separated IP prefixes for fallback detection (e.g. `192.168.1.`) |
 | `TS_REMOVE_ROUTES` | Comma-separated CIDRs to delete from the Tailscale interface |
-| `GW_ADD_ROUTES` | Comma-separated CIDRs to re-add via local gateway (omit if directly-connected routing suffices) |
+| `GW_ADD_ROUTES` | Comma-separated CIDRs to re-add after removing from Tailscale. The script automatically uses interface routing for subnets that exactly match the local network (enabling correct L2/ARP behaviour), and gateway routing for all others. Include your directly-connected subnet here — without it, a broader Tailscale summary route may match instead. |
 
 The routes in `TS_REMOVE_ROUTES` come from whatever your subnet routers are configured to advertise in your tailnet — this tool doesn't assume anything about that. You may have one site or many; any number of sites can be defined.
 

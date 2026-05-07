@@ -126,9 +126,12 @@ Windows approach:
 - `.gitignore` covers all sensitive files
 
 **Test status:**
-- macOS (`/bin/sh` → bash in POSIX mode): tested end-to-end including LaunchDaemon
-- Linux: untested — dispatcher hook logic is correct, but table 52 TODO in `ts_route_del` must be resolved before first Linux run
-- Windows: untested — written to spec but not verified on a real machine; DHCP DNS suffix fallback also pending (see Phase 2 TODO in `ts-route-fix.ps1`)
+- macOS (`/bin/sh` → bash in POSIX mode): tested end-to-end including LaunchDaemon and directly-connected subnet detection
+- Linux: untested — dispatcher hook logic is correct, but two issues must be verified before first Linux run: (1) table 52 TODO in `ts_route_del`; (2) `LOCAL_IP_PREFIXES` parsing uses `ip addr show` output which should include prefix lengths natively — verify format matches expectations
+- Windows: untested — written to spec but not verified on a real machine; directly-connected detection implemented via `Get-LocalSubnetIfIndex` using `Get-NetIPAddress.PrefixLength`; DHCP DNS suffix fallback also pending (see TODO in `ts-route-fix.ps1`)
+
+**Directly-connected subnet detection** (`_is_local_subnet` / `Get-LocalSubnetIfIndex`):
+A CIDR in `GW_ADD_ROUTES` is treated as directly-connected only when BOTH conditions hold: (1) the machine has a local IP that falls within the CIDR, AND (2) the CIDR prefix length exactly matches the interface's configured prefix length. This prevents summary routes (e.g. a /21 covering a directly-attached /23) from being incorrectly routed via the interface. macOS extracts the prefix from `ifconfig`'s hex netmask; Linux gets it from `ip addr show`; Windows uses `Get-NetIPAddress.PrefixLength`.
 
 ## Critical Constraints
 

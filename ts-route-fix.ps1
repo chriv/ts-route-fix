@@ -103,6 +103,38 @@ function Get-SearchDomains {
 #   [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().DomainName
 # This would let site detection work even when the global suffix list isn't set.
 
+# ── Subnet Math ───────────────────────────────────────────────────────────────────
+
+function ConvertTo-IPInt([string]$IP) {
+    $o = $IP -split '\.'
+    return ([long]$o[0] -shl 24) -bor ([long]$o[1] -shl 16) -bor ([long]$o[2] -shl 8) -bor [long]$o[3]
+}
+
+function Test-IPInCIDR([string]$IP, [string]$CIDR) {
+    $net, $prefixStr = $CIDR -split '/'
+    $shift = 32 - [int]$prefixStr
+    return ((ConvertTo-IPInt $IP) -shr $shift) -eq ((ConvertTo-IPInt $net) -shr $shift)
+}
+
+# Returns the InterfaceIndex of the local adapter whose subnet exactly matches CIDR
+# (IP in range AND prefix length equal), or -1 if not a directly-connected subnet.
+# Summary routes that merely contain a local IP return -1.
+function Get-LocalSubnetIfIndex([string]$CIDR) {
+    $cidrPrefix = [int]($CIDR -split '/')[1]
+    $addrs = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Where-Object {
+            -not ($_.IPAddress -like '127.*') -and
+            -not ($_.IPAddress -like '169.254.*') -and
+            -not (Test-IsTailscaleIP $_.IPAddress)
+        }
+    foreach ($addr in $addrs) {
+        if ($addr.PrefixLength -eq $cidrPrefix -and (Test-IPInCIDR $addr.IPAddress $CIDR)) {
+            return $addr.InterfaceIndex
+        }
+    }
+    return -1
+}
+
 # ── Site Matching ─────────────────────────────────────────────────────────────────
 
 function Test-DomainsMatch([string[]]$SearchDomains, [string[]]$Needles) {
@@ -140,27 +172,36 @@ function Invoke-TsRouteDel([string]$CIDR, [int]$IfIndex, [string]$IfName) {
 }
 
 function Invoke-GwRouteAdd([string]$CIDR, [int]$IfIndex, [string]$NextHop) {
-    # TODO: Before adding, check whether this CIDR already exists as a
-    # directly-connected route on a non-Tailscale interface. If it does, skip
-    # the explicit add — removing the route from the Tailscale interface is
-    # sufficient and the existing connected route takes over automatically.
-    # Only add via gateway when no such connected route exists. This matters on
-    # any multi-NIC machine where some advertised subnets are directly reachable
-    # on a local interface that is not the default gateway's interface.
-    # Check candidate:
-    #   Get-NetRoute -DestinationPrefix $CIDR -ErrorAction SilentlyContinue |
-    #       Where-Object { $_.InterfaceIndex -ne $tsIfIndex -and $_.NextHop -eq '0.0.0.0' }
-    Write-Log "  Adding $CIDR via $NextHop"
-    if ($DryRun) {
-        Write-Log "  [DRY-RUN] New-NetRoute -DestinationPrefix $CIDR -InterfaceIndex $IfIndex -NextHop $NextHop"
-        return
-    }
-    Write-Dbg "  + New-NetRoute -DestinationPrefix $CIDR -InterfaceIndex $IfIndex -NextHop $NextHop"
-    try {
-        New-NetRoute -DestinationPrefix $CIDR -InterfaceIndex $IfIndex `
-            -NextHop $NextHop -ErrorAction Stop
-    } catch {
-        if (-not $Quiet) { Write-Log "    (add: $($_.Exception.Message))" }
+    $localIfIndex = Get-LocalSubnetIfIndex $CIDR
+    if ($localIfIndex -ge 0) {
+        # Directly-connected subnet — use on-link route (NextHop 0.0.0.0) so
+        # Windows performs L2 ARP resolution rather than forwarding to the gateway.
+        # Uses the specific interface that owns the subnet (correct on multi-NIC hosts).
+        Write-Log "  Adding $CIDR via interface (directly connected)"
+        if ($DryRun) {
+            Write-Log "  [DRY-RUN] New-NetRoute -DestinationPrefix $CIDR -InterfaceIndex $localIfIndex -NextHop 0.0.0.0"
+            return
+        }
+        Write-Dbg "  + New-NetRoute -DestinationPrefix $CIDR -InterfaceIndex $localIfIndex -NextHop 0.0.0.0"
+        try {
+            New-NetRoute -DestinationPrefix $CIDR -InterfaceIndex $localIfIndex `
+                -NextHop '0.0.0.0' -ErrorAction Stop
+        } catch {
+            if (-not $Quiet) { Write-Log "    (add: $($_.Exception.Message))" }
+        }
+    } else {
+        Write-Log "  Adding $CIDR via $NextHop"
+        if ($DryRun) {
+            Write-Log "  [DRY-RUN] New-NetRoute -DestinationPrefix $CIDR -InterfaceIndex $IfIndex -NextHop $NextHop"
+            return
+        }
+        Write-Dbg "  + New-NetRoute -DestinationPrefix $CIDR -InterfaceIndex $IfIndex -NextHop $NextHop"
+        try {
+            New-NetRoute -DestinationPrefix $CIDR -InterfaceIndex $IfIndex `
+                -NextHop $NextHop -ErrorAction Stop
+        } catch {
+            if (-not $Quiet) { Write-Log "    (add: $($_.Exception.Message))" }
+        }
     }
 }
 
