@@ -97,6 +97,18 @@ detect_default_gw() {
     esac
 }
 
+detect_local_if() {
+    case "$OS" in
+        Darwin)
+            route -n get default 2>/dev/null | awk '/interface:/ { print $2 }'
+            ;;
+        Linux)
+            ip route show default 2>/dev/null \
+                | awk 'NR==1 { for (i=1; i<NF; i++) if ($i == "dev") { print $(i+1); exit } }'
+            ;;
+    esac
+}
+
 # ── Route Operations ──────────────────────────────────────────────────────────────
 
 # Remove a CIDR from the Tailscale interface
@@ -121,26 +133,57 @@ ts_route_del() {
     esac
 }
 
-# Add a CIDR via the local default gateway
+# Convert a dotted-quad IPv4 address to an integer.
+_ip_to_int() {
+    _a="${1%%.*}"; _r="${1#*.}"
+    _b="${_r%%.*}"; _r="${_r#*.}"
+    _c="${_r%%.*}"; _d="${_r##*.}"
+    printf '%d\n' "$(( (_a << 24) | (_b << 16) | (_c << 8) | _d ))"
+}
+
+# Returns 0 if the given IP falls within the given CIDR.
+_ip_in_cidr() {
+    _shift=$(( 32 - ${2##*/} ))
+    [ $(( $(_ip_to_int "$1") >> _shift )) -eq $(( $(_ip_to_int "${2%%/*}") >> _shift )) ]
+}
+
+# Returns 0 if CIDR is the exact directly-connected subnet for a local interface:
+# the local IP must fall within the CIDR AND the prefix lengths must match exactly.
+# Summary routes (e.g. /21 covering a directly-attached /23) return 1.
+_is_local_subnet() {
+    _cidr="$1"
+    _cidr_prefix="${_cidr##*/}"
+    for _ip_prefix in $LOCAL_IP_PREFIXES; do
+        if [ "${_ip_prefix##*/}" = "$_cidr_prefix" ] && _ip_in_cidr "${_ip_prefix%%/*}" "$_cidr"; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Add a CIDR route. If the CIDR is the exact directly-connected subnet for a
+# local interface, route via the interface for correct L2/ARP behaviour.
+# Summary routes and remote subnets route via the local default gateway.
 gw_route_add() {
-    _cidr="$1" _gw="$2"
-    # TODO: Before adding, check whether this CIDR already exists in the main
-    # routing table as a directly-connected route on a non-Tailscale interface.
-    # If it does, skip the explicit add — removing it from table 52 (Linux) or
-    # the Tailscale interface (macOS/Windows) is sufficient, and the kernel's
-    # existing connected route takes over automatically. Only add via gateway
-    # when no such connected route exists. This matters on any multi-NIC machine
-    # where some advertised subnets are directly reachable on a local interface
-    # that is not the default gateway's interface.
-    # Per-OS check candidates:
-    #   Linux:   ip route show table main "$_cidr" | grep -v tailscale0 | grep -q "scope link"
-    #   Darwin:  netstat -rn -f inet | awk -v n="$(_cidr_to_netstat $_cidr)" '$1==n && $NF!="utun*"'
-    #   Windows: Get-NetRoute -DestinationPrefix $cidr | Where-Object { $_.InterfaceIndex -ne $tsIfIndex }
-    log "  Adding $_cidr via $_gw"
-    case "$OS" in
-        Darwin) run_cmd route -n add -net "$_cidr" "$_gw" ;;
-        Linux)  run_cmd ip route add "$_cidr" via "$_gw" ;;
-    esac
+    _cidr="$1" _gw="$2" _local_if="$3"
+    _direct=0
+    if _is_local_subnet "$_cidr"; then
+        _direct=1
+    fi
+
+    if [ "$_direct" -eq 1 ]; then
+        log "  Adding $_cidr via interface $_local_if (directly connected)"
+        case "$OS" in
+            Darwin) run_cmd route -n add -net "$_cidr" -interface "$_local_if" ;;
+            Linux)  run_cmd ip route add "$_cidr" dev "$_local_if" ;;
+        esac
+    else
+        log "  Adding $_cidr via $_gw"
+        case "$OS" in
+            Darwin) run_cmd route -n add -net "$_cidr" "$_gw" ;;
+            Linux)  run_cmd ip route add "$_cidr" via "$_gw" ;;
+        esac
+    fi
 }
 
 # Remove a CIDR regardless of which interface/gateway it's on (stale route cleanup)
@@ -272,18 +315,39 @@ if [ -z "$LOCAL_GW" ]; then
     exit 0
 fi
 
+LOCAL_IF=$(detect_local_if)
+if [ -z "$LOCAL_IF" ]; then
+    verbose "No local interface detected — skipping"
+    exit 0
+fi
+
 SEARCH_DOMAINS=$(grep "^search" /etc/resolv.conf 2>/dev/null | cut -d' ' -f2- || true)
 
 if [ "$OS" = "Darwin" ]; then
     LOCAL_IPS=$(ifconfig | awk '/inet / && !/127\./ && !/100\./ { print $2 }')
+    # Parse hex netmask (e.g. 0xfffffe00) to prefix length by counting nibbles.
+    LOCAL_IP_PREFIXES=$(ifconfig | awk '
+        /inet / && !/127\./ && !/100\./ {
+            ip=$2; nm=$4; gsub(/^0x/,"",nm)
+            prefix=0
+            for(i=1;i<=length(nm);i++){
+                c=substr(nm,i,1)
+                if(c=="f"){prefix+=4}
+                else{if(c=="e")prefix+=3;else if(c=="c")prefix+=2;else if(c=="8")prefix+=1;break}
+            }
+            print ip"/"prefix
+        }')
 else
     LOCAL_IPS=$(ip -4 addr show | awk '/inet / && !/127\./ && !/100\./ { split($2,a,"/"); print a[1] }')
+    LOCAL_IP_PREFIXES=$(ip -4 addr show | awk '/inet / && !/127\./ && !/100\./ { print $2 }')
 fi
 
 verbose "Tailscale interface : $TS_IF"
 verbose "Default gateway     : $LOCAL_GW"
+verbose "Local interface     : $LOCAL_IF"
 verbose "Search domains      : $SEARCH_DOMAINS"
 verbose "Local IPs           : $(printf '%s ' $LOCAL_IPS)"
+verbose "Local IP/prefixes   : $(printf '%s ' $LOCAL_IP_PREFIXES)"
 
 MATCHED_SITE=""
 MATCHED_TS_ROUTES=""
@@ -345,7 +409,7 @@ fi
 if [ -n "$MATCHED_GW_ROUTES" ]; then
     _IFS_SAVE="$IFS"; IFS=','
     for _r in $MATCHED_GW_ROUTES; do
-        gw_route_add "$_r" "$LOCAL_GW"
+        gw_route_add "$_r" "$LOCAL_GW" "$LOCAL_IF"
     done
     IFS="$_IFS_SAVE"
 fi
