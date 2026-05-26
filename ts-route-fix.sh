@@ -321,7 +321,33 @@ if [ -z "$LOCAL_IF" ]; then
     exit 0
 fi
 
-SEARCH_DOMAINS=$(grep "^search" /etc/resolv.conf 2>/dev/null | cut -d' ' -f2- || true)
+# Read DHCP-assigned domain from the physical interface rather than /etc/resolv.conf.
+# Tailscale rewrites resolv.conf with all tailnet search domains (e.g. rennerfamily.org
+# shows up everywhere Tailscale is connected), making it useless for site detection.
+case "$OS" in
+    Darwin)
+        # ipconfig getpacket returns the raw DHCP lease for the interface.
+        # domain_name (option 15) is the single domain the network DHCP pushed.
+        # domain_search (option 119) is the full search list some networks push.
+        SEARCH_DOMAINS=$(ipconfig getpacket "$LOCAL_IF" 2>/dev/null | awk '
+            /^domain_name \(string\):/        { print $NF }
+            /^domain_search \(string_array\):/ {
+                gsub(/[{},]/, "")
+                for (i = 3; i <= NF; i++) if ($i != "") printf "%s ", $i
+                printf "\n"
+            }')
+        ;;
+    Linux)
+        # Try NetworkManager; fall back to resolv.conf for non-NM systems.
+        if command -v nmcli >/dev/null 2>&1; then
+            SEARCH_DOMAINS=$(nmcli -t -f DHCP4.OPTION device show "$LOCAL_IF" 2>/dev/null \
+                | awk -F'[=:]' '/domain_name/ { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $NF); print $NF }')
+        fi
+        if [ -z "${SEARCH_DOMAINS:-}" ]; then
+            SEARCH_DOMAINS=$(grep "^search" /etc/resolv.conf 2>/dev/null | cut -d' ' -f2- || true)
+        fi
+        ;;
+esac
 
 if [ "$OS" = "Darwin" ]; then
     LOCAL_IPS=$(ifconfig | awk '/inet / && !/127\./ && !/100\./ { print $2 }')
@@ -424,6 +450,8 @@ while IFS='|' read -r _name _domains _ip_prefix _ts_routes _gw_routes; do
     if [ -n "$_gw_routes" ]; then
         _IFS_SAVE="$IFS"; IFS=','
         for _r in $_gw_routes; do
+            # Only remove routes we added locally; leave Tailscale-managed routes alone.
+            _ts_route_present "$_r" && { verbose "  Skipping stale cleanup of $_r — still on $TS_IF"; continue; }
             route_del_any "$_r"
         done
         IFS="$_IFS_SAVE"

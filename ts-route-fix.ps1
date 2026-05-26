@@ -93,15 +93,18 @@ function Get-LocalIPs {
         Select-Object -ExpandProperty IPAddress
 }
 
-function Get-SearchDomains {
-    try { (Get-DnsClientGlobalSetting).SuffixSearchList }
-    catch { @() }
+function Get-SearchDomains([int]$PhysIfIndex) {
+    # Query per-adapter DHCP-assigned DNS suffix rather than the global suffix list.
+    # Tailscale rewrites Get-DnsClientGlobalSetting.SuffixSearchList with tailnet
+    # domains when connected, making the global list unreliable for site detection.
+    try {
+        $suffix = (Get-DnsClient -InterfaceIndex $PhysIfIndex -ErrorAction Stop).ConnectionSpecificSuffix
+        if ($suffix) { return @($suffix) }
+    } catch {}
+    # Fall back to global suffix list for static IP or non-DHCP configurations
+    try { return @((Get-DnsClientGlobalSetting).SuffixSearchList) }
+    catch { return @() }
 }
-# TODO: Windows fallback — if SuffixSearchList is empty or unreliable, also check
-# the host's primary DNS suffix, which DHCP-assigned domains populate as part of
-# the machine's FQDN. Candidate:
-#   [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().DomainName
-# This would let site detection work even when the global suffix list isn't set.
 
 # ── Subnet Math ───────────────────────────────────────────────────────────────────
 
@@ -267,7 +270,7 @@ if (-not $defaultRoute) {
 $physIfIndex = $defaultRoute.InterfaceIndex
 $defaultGW   = $defaultRoute.NextHop
 
-$searchDomains = @(Get-SearchDomains)
+$searchDomains = @(Get-SearchDomains $physIfIndex)
 $localIPs      = @(Get-LocalIPs)
 
 Write-Log "Tailscale interface : $tsIfName (index $tsIfIndex)"
@@ -326,6 +329,8 @@ if (-not $matchedSite) {
 foreach ($site in $sites) {
     if ($matchedSite -and $site.Name -eq $matchedSite.Name) { continue }
     foreach ($cidr in $site.GwAdd) {
+        # $physIfIndex scoping means only locally-added routes are removed;
+        # routes on the Tailscale adapter (different InterfaceIndex) are untouched.
         Invoke-RouteDelAny $cidr $physIfIndex
     }
 }

@@ -27,7 +27,7 @@ Tailscale lets exit nodes and subnet routers advertise routes to the whole tailn
 
 A `sites.conf` file defines each known location: which DNS search domains (or local IP prefixes) identify it, which Tailscale-advertised routes to remove, and which of those routes to explicitly re-add via the local gateway. On each run:
 
-1. **Detect site** — match `/etc/resolv.conf` search domains, fall back to local IP prefix; exit silently if Tailscale is not running or no site matches
+1. **Detect site** — match the DHCP-assigned DNS domain from the physical network adapter (not the Tailscale-managed resolver), fall back to local IP prefix; exit silently if Tailscale is not running or no site matches
 2. **Check routes** — read the routing table once; if the configured routes are already correct, exit silently with no output
 3. **Fix routes** — delete matched routes from the Tailscale interface; re-add via the local interface (for directly-connected subnets) or via gateway (for all others)
 4. **Clean up** — remove any locally-added routes from other sites (handles moving between locations)
@@ -61,7 +61,7 @@ SITE_NAME | SEARCH_DOMAINS | LOCAL_IP_PREFIX | TS_REMOVE_ROUTES | GW_ADD_ROUTES
 | Field | Description |
 |---|---|
 | `SITE_NAME` | Label shown in log output |
-| `SEARCH_DOMAINS` | Comma-separated strings matched against `/etc/resolv.conf` search line |
+| `SEARCH_DOMAINS` | Comma-separated strings matched (as substrings) against the DHCP-assigned DNS domain from the physical network adapter. Tailscale-injected search domains are excluded. |
 | `LOCAL_IP_PREFIX` | Comma-separated IP prefixes for fallback detection (e.g. `192.168.1.`) |
 | `TS_REMOVE_ROUTES` | Comma-separated CIDRs to delete from the Tailscale interface |
 | `GW_ADD_ROUTES` | Comma-separated CIDRs to re-add after removing from Tailscale. The script automatically uses interface routing for subnets that exactly match the local network (enabling correct L2/ARP behaviour), and gateway routing for all others. Include your directly-connected subnet here — without it, a broader Tailscale summary route may match instead. |

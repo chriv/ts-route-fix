@@ -5,13 +5,14 @@
 #
 # Field details:
 #   SITE_NAME        Identifier shown in log output
-#   SEARCH_DOMAINS   Comma-separated strings matched against /etc/resolv.conf "search" line
+#   SEARCH_DOMAINS   Comma-separated strings matched against the DHCP-assigned DNS domain
+#                    from the physical network adapter (not the Tailscale-managed resolver)
 #   LOCAL_IP_PREFIX  Comma-separated IP prefixes used as fallback detection (e.g. "10.0.1.")
 #   TS_REMOVE_ROUTES Comma-separated CIDRs to delete from the Tailscale interface
 #   GW_ADD_ROUTES    Comma-separated CIDRs to re-add via the local gateway (can be empty)
 #
 # Detection order:
-#   1. SEARCH_DOMAINS match (preferred — DNS config changes as soon as you connect)
+#   1. SEARCH_DOMAINS match (preferred — DHCP lease reflects the current physical network)
 #   2. LOCAL_IP_PREFIX match (fallback — check actual IP address)
 #
 # Behavior:

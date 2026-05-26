@@ -34,7 +34,7 @@ Each line in `sites.conf` defines one site:
 ```
 # FORMAT: SITE_NAME|SEARCH_DOMAINS|LOCAL_IP_PREFIX|ROUTES_TO_RESTORE
 # Fields are pipe-delimited. Multiple values within a field are comma-delimited.
-# SEARCH_DOMAINS: partial strings matched against /etc/resolv.conf search line
+# SEARCH_DOMAINS: partial strings matched against DHCP-assigned DNS domain from physical adapter
 # LOCAL_IP_PREFIX: prefix matched against local IPs (e.g. "10.10." or "192.168.1.")
 # ROUTES_TO_RESTORE: CIDR blocks that Tailscale advertises but should use local routing
 #
@@ -49,7 +49,7 @@ Each line in `sites.conf` defines one site:
 |---|---|---|---|
 | Tailscale interface | `utun*` (detect via `ifconfig`) | `tailscale0` (usually) | Tailscale TAP adapter |
 | Route commands | `route -n delete/add -net` | `ip route del/add` | `route delete/add` or `Remove-NetRoute` |
-| Search domain detection | `/etc/resolv.conf` | `/etc/resolv.conf` | `Get-DnsClientGlobalSetting` |
+| Search domain detection | `ipconfig getpacket <if>` (DHCP) | `nmcli DHCP4.OPTION`, falls back to `/etc/resolv.conf` | `Get-DnsClient.ConnectionSpecificSuffix`, falls back to `Get-DnsClientGlobalSetting` |
 | Tailscale up hook | LaunchDaemon plist or `networksetup` | `/etc/networkd-dispatcher/` or `if-up.d/` | Task Scheduler on network connect |
 | sudoers.d | `/etc/sudoers.d/` | `/etc/sudoers.d/` | N/A (Run As) |
 | Config location | `/etc/ts-route-fix/` | `/etc/ts-route-fix/` | `%ProgramData%\ts-route-fix\` |
@@ -69,7 +69,7 @@ Key tasks:
 - Linux interface detection: `ip -4 addr show tailscale0` or look for the `100.x.x.x` address via `ip addr`
 - Mac route ops: `route -n delete/add -net CIDR -interface IF` / `route -n add -net CIDR GW`
 - Linux route ops: Tailscale on Linux installs its routes in **routing table 52** (not the main table). Deletions must target that table: `ip route del CIDR table 52`. Additions go into the main table as normal: `ip route add CIDR via GW`. Verify with `ip route show table 52` on a Linux+Tailscale host before implementing.
-- Parse search domains from `/etc/resolv.conf` on both platforms
+- Read DHCP-assigned domain from the physical interface (`ipconfig getpacket` on macOS; `nmcli DHCP4.OPTION.domain_name` on Linux, falling back to `/etc/resolv.conf`). Do NOT read from `/etc/resolv.conf` directly — Tailscale rewrites it with all tailnet search domains when connected, causing false site matches
 - Fall back to local IP prefix matching when no search domain matches
 - Log actions clearly; support `-v` verbose flag and `-n` dry-run flag
 - Exit codes: 0 success, 1 no Tailscale interface, 2 no matching site (applies no changes)
@@ -82,8 +82,7 @@ Key tasks:
 - Config location: `%ProgramData%\ts-route-fix\sites.conf` (override via env var)
 - Tailscale interface: find adapter whose IP is in `100.64.0.0/10` via `Get-NetIPAddress`
 - Default gateway: `Get-NetRoute -DestinationPrefix "0.0.0.0/0"`
-- Search domain detection: `(Get-DnsClientGlobalSetting).SuffixSearchList`
-- **TODO (Windows fallback):** If the suffix list is empty, also check the machine's primary DNS suffix — Windows populates this from the DHCP-assigned domain name as part of the host FQDN. Candidate API: `[System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().DomainName`
+- Search domain detection: `Get-DnsClient.ConnectionSpecificSuffix` for the physical adapter (DHCP-assigned only); falls back to `Get-DnsClientGlobalSetting.SuffixSearchList`. Using the per-adapter DHCP suffix avoids false matches from Tailscale-injected domains in the global suffix list.
 - Local IP: `Get-NetIPAddress` filtered for private ranges
 - Route ops: `Remove-NetRoute` / `New-NetRoute` (requires elevation)
 - Provide a `.bat` launcher shim for contexts that can't call `.ps1` directly
@@ -126,9 +125,9 @@ Windows approach:
 - `.gitignore` covers all sensitive files
 
 **Test status:**
-- macOS (`/bin/sh` → bash in POSIX mode): tested end-to-end including LaunchDaemon and directly-connected subnet detection
-- Linux: untested — dispatcher hook logic is correct, but two issues must be verified before first Linux run: (1) table 52 TODO in `ts_route_del`; (2) `LOCAL_IP_PREFIXES` parsing uses `ip addr show` output which should include prefix lengths natively — verify format matches expectations
-- Windows: untested — written to spec but not verified on a real machine; directly-connected detection implemented via `Get-LocalSubnetIfIndex` using `Get-NetIPAddress.PrefixLength`; DHCP DNS suffix fallback also pending (see TODO in `ts-route-fix.ps1`)
+- macOS (`/bin/sh` → bash in POSIX mode): tested end-to-end including LaunchDaemon, directly-connected subnet detection, DHCP-based site detection (`ipconfig getpacket`), and Pass 3 Tailscale route preservation
+- Linux: untested — dispatcher hook logic is correct, but verify before first run: (1) table 52 TODO in `ts_route_del` still needs fixing; (2) `LOCAL_IP_PREFIXES` parsing via `ip addr show` — verify format matches expectations; (3) DHCP detection via `nmcli` is implemented but untested; resolv.conf fallback present for non-NM systems (has the Tailscale pollution problem but is last resort)
+- Windows: untested — written to spec but not verified on a real machine; directly-connected detection implemented via `Get-LocalSubnetIfIndex`; DHCP-based site detection implemented via `Get-DnsClient.ConnectionSpecificSuffix`; Pass 3 is inherently safe (interface-index scoping prevents Tailscale route deletion)
 
 **Directly-connected subnet detection** (`_is_local_subnet` / `Get-LocalSubnetIfIndex`):
 A CIDR in `GW_ADD_ROUTES` is treated as directly-connected only when BOTH conditions hold: (1) the machine has a local IP that falls within the CIDR, AND (2) the CIDR prefix length exactly matches the interface's configured prefix length. This prevents summary routes (e.g. a /21 covering a directly-attached /23) from being incorrectly routed via the interface. macOS extracts the prefix from `ifconfig`'s hex netmask; Linux gets it from `ip addr show`; Windows uses `Get-NetIPAddress.PrefixLength`.
