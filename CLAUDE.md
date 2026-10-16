@@ -32,15 +32,16 @@ ts-route-fix/
 Each line in `sites.conf` defines one site:
 
 ```
-# FORMAT: SITE_NAME|SEARCH_DOMAINS|LOCAL_IP_PREFIX|ROUTES_TO_RESTORE
+# FORMAT: SITE_NAME|SEARCH_DOMAINS|LOCAL_IP_PREFIX|TS_REMOVE_ROUTES|GW_ADD_ROUTES
 # Fields are pipe-delimited. Multiple values within a field are comma-delimited.
 # SEARCH_DOMAINS: partial strings matched against DHCP-assigned DNS domain from physical adapter
-# LOCAL_IP_PREFIX: prefix matched against local IPs (e.g. "10.10." or "192.168.1.")
-# ROUTES_TO_RESTORE: CIDR blocks that Tailscale advertises but should use local routing
+# LOCAL_IP_PREFIX: prefix matched against local IPs (e.g. "10.0.1." or "192.168.1.")
+# TS_REMOVE_ROUTES: CIDR blocks Tailscale advertises that should be deleted from the Tailscale interface
+# GW_ADD_ROUTES: CIDR blocks to re-add via the local gateway (or the interface, if directly connected)
 #
 # Example:
-# home|example.local,home.lan|10.0.1.|10.0.0.0/24,10.0.1.0/24
-# office|corp.example.com|172.16.0.|172.16.0.0/16
+# home|example.local,home.lan|10.0.1.|10.0.0.0/24,10.0.1.0/24|10.0.0.0/24,10.0.1.0/24
+# office|corp.example.com|172.16.0.|172.16.0.0/16|172.16.0.0/16
 ```
 
 ## Platform-Specific Behavior
@@ -72,7 +73,7 @@ Key tasks:
 - Read DHCP-assigned domain from the physical interface (`ipconfig getpacket` on macOS; `nmcli DHCP4.OPTION.domain_name` on Linux, falling back to `/etc/resolv.conf`). Do NOT read from `/etc/resolv.conf` directly — Tailscale rewrites it with all tailnet search domains when connected, causing false site matches
 - Fall back to local IP prefix matching when no search domain matches
 - Log actions clearly; support `-v` verbose flag and `-n` dry-run flag
-- Exit codes: 0 success, 1 no Tailscale interface, 2 no matching site (applies no changes)
+- Exit codes: 0 for success **and** for every benign skip — Tailscale not running, no default gateway, no local interface, no matching site, or routes already correct (all silent unless `-v`). A notebook that matches no site is normal, and the LaunchDaemon/dispatcher polls must not log errors for it. 1 only for real errors (missing config, bad arguments). Note: `ts-route-fix.ps1` still exits 1 when Tailscale isn't running (see its TODO).
 - Must be POSIX-compatible `#!/bin/sh` except where platform branching requires bash-isms
 
 ### Phase 2 — Windows PowerShell script ✅ Done
